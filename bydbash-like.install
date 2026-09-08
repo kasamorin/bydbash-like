@@ -1,0 +1,102 @@
+#!/bin/bash
+
+FILES='.bashrc .bash_profile'
+
+target_user() {
+    local u id
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        u="$SUDO_USER"
+    elif [ -n "${SUDO_UID:-}" ]; then
+        id="$(getent passwd "$SUDO_UID" 2>/dev/null)"
+        u="${id%%:*}"
+    else
+        u="${USER:-}"
+        [ "$u" = root ] && u=
+    fi
+    if [ -z "$u" ]; then
+        u="$(getent passwd 1000 2>/dev/null | cut -d: -f1)"
+    fi
+    [ -z "$u" ] && u=root
+    printf '%s\n' "$u"
+}
+
+target_home() {
+    local u h
+    u="$(target_user)"
+    h="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+    [ -z "$h" ] && h="/home/$u"
+    printf '%s\n' "$h"
+}
+
+backup_dir() {
+    printf '%s\n' "$(target_home)/.config/bydbash-like/backup"
+}
+
+# pre_install/pre_upgrade：在 pacman 覆盖文件之前，把当前生效的原配置移进
+# ~/.config/bydbash-like/backup（用 move 而非 copy：目标位置空出来后，
+# pacman 才会真正装上本包配置，也不会再生成 .pacsave）。
+# 已有备份（升级场景）则保留首次安装时的原配置。
+backup_originals() {
+    local h b u f any
+    h="$(target_home)"
+    b="$(backup_dir)"
+    u="$(target_user)"
+    if [ -f "$b/.bashrc" ] || [ -f "$b/.bash_profile" ]; then
+        return 0
+    fi
+    mkdir -p "$b"
+    any=0
+    for f in $FILES; do
+        if [ -e "$h/$f" ]; then
+            mv -f "$h/$f" "$b/$f"
+            any=1
+        fi
+    done
+    if [ "$any" -eq 1 ]; then
+        printf '由 bydbash-like 安装时备份 (%s)\n' "$(date '+%F %T')" > "$b/.manifest"
+        printf '%s\n' "$FILES" >> "$b/.manifest"
+        chown -R "$u:$u" "$(dirname "$b")"
+    else
+        rm -rf "$b"
+    fi
+}
+
+# post_install/post_upgrade：pacman 因 backup 数组为已存在文件生成的 <file>.pacsave
+# 属冗余（pre_install 已完整备份原配置），清掉避免堆积。
+cleanup_pacsave() {
+    local h b f
+    h="$(target_home)"
+    b="$(backup_dir)"
+    for f in $FILES; do
+        [ -f "$b/$f" ] && rm -f "$h/$f.pacsave"
+    done
+}
+
+# post_remove：pacman 删完包文件后，把原配置还原回 $HOME，并删除整个
+# ~/.config/bydbash-like 目录（含备份与空父目录），做到干净卸载。
+restore() {
+    local h b u f
+    h="$(target_home)"
+    b="$(backup_dir)"
+    u="$(target_user)"
+    [ -d "$b" ] || return 0
+    for f in $FILES; do
+        if [ -f "$b/$f" ]; then
+            cp -a "$b/$f" "$h/$f"
+            chown "$u" "$h/$f"
+        fi
+    done
+    rm -rf "$(dirname "$b")"
+}
+
+# 安装/升级后提醒用户让新配置生效（当前 shell 内存里的还是旧配置）
+remind_reload() {
+    printf '\n[bydbash-like] 新配置已安装，请执行下面命令让其生效（或直接重开终端）：\n'
+    printf '    source ~/.bashrc\n\n'
+}
+
+pre_install()  { backup_originals; }
+post_install() { cleanup_pacsave; remind_reload; }
+pre_upgrade()  { backup_originals; }
+post_upgrade() { cleanup_pacsave; remind_reload; }
+post_remove()  { restore; }
