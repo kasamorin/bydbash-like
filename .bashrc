@@ -241,7 +241,7 @@ alias ...='cd ../..'
 alias ....='cd ../../..'
 
 # pacman 快捷（Arch）
-alias update='sudo pacman -Syuu'
+alias update='sudo pacman -Syu'
 alias install='sudo pacman -S'
 alias remove='sudo pacman -Rns'
 alias searchpkg='pacman -Ss'
